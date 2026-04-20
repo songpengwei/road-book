@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>路书 · Road Book</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>路书 <span class="sub">Road Book</span></h1>
+    <nav>
+      <span style="color:var(--fg-muted);font-size:12px">不材之木，不鸣之鸟</span>
+    </nav>
+  </header>
+
+  <div class="container">
+    <h2 class="section-title">新建</h2>
+    <form class="new-trip-form" id="newForm">
+      <input type="text" id="newName" placeholder="给这本路书起个名字——比如「五岳归来」" required>
+      <button type="submit" class="primary">新建</button>
+    </form>
+
+    <h2 class="section-title">我的路书</h2>
+    <ul class="trip-list" id="tripList"></ul>
+    <div class="empty" id="emptyHint" style="display:none">暂无路书。从上面开一本。</div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const api = async (url, opt = {}) => {
+      const r = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...opt,
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.status === 204 ? null : r.json();
+    };
+
+    function toast(msg) {
+      const t = $("#toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), 1800);
+    }
+
+    function fmtDate(s) {
+      const d = new Date(s);
+      return d.toLocaleString("zh-CN", { hour12: false });
+    }
+
+    async function load() {
+      const trips = await api("/api/trips");
+      const list = $("#tripList");
+      list.innerHTML = "";
+      if (!trips.length) {
+        $("#emptyHint").style.display = "block";
+        return;
+      }
+      $("#emptyHint").style.display = "none";
+      for (const t of trips) {
+        const li = document.createElement("li");
+        li.innerHTML = `
+          <div>
+            <div class="name">${escapeHtml(t.name)}</div>
+            <div class="meta">${t.points.length} 个地点 · 更新于 ${fmtDate(t.updated_at)}</div>
+          </div>
+          <div class="actions">
+            <a class="btn" href="/edit?id=${t.id}">编辑</a>
+            <a class="btn" href="/export?id=${t.id}">导出</a>
+            <button class="danger" data-id="${t.id}">删除</button>
+          </div>
+        `;
+        list.appendChild(li);
+      }
+      list.querySelectorAll("button.danger").forEach(btn => {
+        btn.onclick = async () => {
+          if (!confirm("删掉这本路书？")) return;
+          await api(`/api/trips/${btn.dataset.id}`, { method: "DELETE" });
+          load();
+        };
+      });
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    }
+
+    $("#newForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const name = $("#newName").value.trim();
+      if (!name) return;
+      const t = await api("/api/trips", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      location.href = `/edit?id=${t.id}`;
+    };
+
+    load();
+  </script>
+</body>
+</html>

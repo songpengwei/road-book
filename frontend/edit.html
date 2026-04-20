@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>编辑路书 · Road Book</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1><a href="/" style="border:none">路书</a> <span class="sub" id="tripName">加载中…</span></h1>
+    <nav>
+      <a href="#" id="exportLink">导出</a>
+      <a href="/">返回</a>
+    </nav>
+  </header>
+
+  <div class="editor">
+    <aside class="sidebar">
+      <div class="trip-meta">
+        <input type="text" id="nameInput" placeholder="路书名">
+        <textarea id="descInput" placeholder="随便写点说明——去哪、谁一起、什么季节……"></textarea>
+        <div style="margin-top:6px;text-align:right">
+          <button id="saveMetaBtn">保存</button>
+        </div>
+      </div>
+
+      <div style="margin:20px 0 4px">
+        <h2>地点</h2>
+        <div class="hint">点一下地图添加；拖动标记可微调位置；点击列表项可编辑。</div>
+      </div>
+
+      <ul class="point-list" id="pointList"></ul>
+    </aside>
+
+    <div class="map-area">
+      <div id="map"></div>
+
+      <div class="edit-panel" id="editPanel" style="display:none">
+        <h3>地点信息</h3>
+        <label>标题</label>
+        <input type="text" id="epTitle" placeholder="例如：雁栖湖日出">
+        <label>备注</label>
+        <textarea id="epNote" placeholder="可选"></textarea>
+        <label>经纬度</label>
+        <input type="text" id="epCoord" readonly style="font-family:monospace;color:var(--fg-muted)">
+        <div class="actions">
+          <button id="epCancel">取消</button>
+          <button id="epSave" class="primary">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/edit.js"></script>
+</body>
+</html>
