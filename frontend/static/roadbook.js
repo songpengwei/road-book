@@ -94,6 +94,7 @@ window.RoadBook = (() => {
 
     const selectedFeatures = (selectedGeo?.features || []).filter(Boolean);
     const projection = d3.geoMercator();
+    projection.preclip((stream) => stream);
     projection.fitExtent([[28, 28], [width - 28, height - 28]], backgroundGeo);
     const path = d3.geoPath(projection);
 
