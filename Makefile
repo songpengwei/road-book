@@ -4,7 +4,7 @@ PIP ?= $(PYTHON) -m pip
 UVICORN ?= ../$(VENV)/bin/uvicorn
 PORT ?= 8000
 
-.PHONY: venv install compile compile-backend compile-frontend start dev
+.PHONY: venv install compile compile-backend compile-frontend start stop restart dev
 
 venv:
 	python3 -m venv $(VENV)
@@ -29,5 +29,11 @@ compile-frontend:
 
 start:
 	cd backend && $(UVICORN) app:app --host 0.0.0.0 --port $(PORT)
+
+stop:
+	pids=$$(ps -eo pid=,args= | awk '/[u]vicorn app:app --host 0.0.0.0 --port $(PORT)$$/ {print $$1}'); \
+	if [ -n "$$pids" ]; then kill $$pids; fi
+
+restart: stop start
 
 dev: start

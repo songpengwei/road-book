@@ -78,11 +78,11 @@ window.RoadBook = (() => {
     return stops;
   }
 
-  function computeProjectedCenters(features, projection) {
+  function computeProjectedCenters(features, path) {
     const result = new Map();
     features.forEach((feature) => {
-      const centroid = d3.geoCentroid(feature);
-      result.set(String(feature.properties.adcode), projection(centroid));
+      const centroid = path.centroid(feature);
+      result.set(String(feature.properties.adcode), centroid);
     });
     return result;
   }
@@ -101,12 +101,11 @@ window.RoadBook = (() => {
     const svg = shell.append("svg")
       .attr("viewBox", `0 0 ${width} ${height}`)
       .attr("class", "rb-map-svg");
-    const scene = svg.append("g").attr("class", "rb-map-scene");
-
     svg.append("rect")
       .attr("width", width)
       .attr("height", height)
       .attr("fill", "#f7f4ee");
+    const scene = svg.append("g").attr("class", "rb-map-scene");
 
     scene.append("g")
       .selectAll("path")
@@ -129,7 +128,7 @@ window.RoadBook = (() => {
       .attr("stroke-dasharray", "8 6")
       .attr("stroke-linejoin", "round");
 
-    const centers = computeProjectedCenters(selectedFeatures, projection);
+    const centers = computeProjectedCenters(selectedFeatures, path);
     scene.append("g")
       .selectAll("text")
       .data(selectedFeatures)
