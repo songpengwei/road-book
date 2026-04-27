@@ -12,6 +12,7 @@ env/
 # Data
 data/*.db
 data/*.sqlite
+data/cache/
 data/uploads/
 data/exports/
 !data/.gitkeep
@@ -25,3 +26,5 @@ data/exports/
 # Env
 .env
 .env.local
+
+images

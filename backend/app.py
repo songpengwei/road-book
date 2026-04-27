@@ -1,35 +1,46 @@
 """FastAPI 主入口：提供 REST API + 静态前端文件。"""
 from __future__ import annotations
+
 import json
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, Response
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from sqlmodel import Session, select
+from pydantic import BaseModel, Field
+from sqlmodel import Session, SQLModel, select
 
-from db import engine, init_db, get_session, DATA_DIR
+from db import DB_PATH, engine, get_session
+from geo import load_boundary, load_province_boundaries, search_regions
 import models
-from render import render_overlay
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
-UPLOAD_DIR = DATA_DIR / "uploads"
 
-app = FastAPI(title="Road Book API", version="0.1.0")
+app = FastAPI(title="Road Book API", version="0.2.0")
+
+
+def _ensure_trip_columns():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(trip)")
+    existing = {row[1] for row in cur.fetchall()}
+    if "regions_json" not in existing:
+        cur.execute("ALTER TABLE trip ADD COLUMN regions_json TEXT NOT NULL DEFAULT '[]'")
+    if "itinerary_json" not in existing:
+        cur.execute("ALTER TABLE trip ADD COLUMN itinerary_json TEXT NOT NULL DEFAULT '[]'")
+    conn.commit()
+    conn.close()
 
 
 @app.on_event("startup")
 def on_startup():
-    # 直接在这里注册表（避开 db.init_db 里的 relative import）
-    from sqlmodel import SQLModel
     SQLModel.metadata.create_all(engine)
+    _ensure_trip_columns()
 
-
-# ---------- Schemas ----------
 
 class PointIn(BaseModel):
     lng: float
@@ -43,6 +54,32 @@ class PointOut(PointIn):
     order_index: int
 
 
+class RegionSelection(BaseModel):
+    adcode: str
+    name: str
+    full_name: str = ""
+    level: str = ""
+    parents: List[str] = Field(default_factory=list)
+
+
+class PlaceItem(BaseModel):
+    id: str = ""
+    title: str = ""
+    category: str = "heritage"
+    region_adcode: str = ""
+
+
+class ItineraryItem(BaseModel):
+    id: str = ""
+    title: str = ""
+    time: str = ""
+    transport: str = ""
+    route_text: str = ""
+    accommodation: str = ""
+    notes: str = ""
+    places: List[PlaceItem] = Field(default_factory=list)
+
+
 class TripIn(BaseModel):
     name: str = "未命名路书"
     description: str = ""
@@ -51,6 +88,8 @@ class TripIn(BaseModel):
 class TripPatch(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    regions: Optional[List[RegionSelection]] = None
+    itinerary: Optional[List[ItineraryItem]] = None
 
 
 class TripOut(BaseModel):
@@ -59,14 +98,23 @@ class TripOut(BaseModel):
     description: str
     created_at: datetime
     updated_at: datetime
-    points: List[PointOut] = []
+    points: List[PointOut] = Field(default_factory=list)
+    regions: List[RegionSelection] = Field(default_factory=list)
+    itinerary: List[ItineraryItem] = Field(default_factory=list)
 
 
 class ReorderIn(BaseModel):
     point_ids: List[int]
 
 
-# ---------- Helpers ----------
+def _load_json_field(raw: str, default):
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
 
 def _point_out(p: models.Point) -> PointOut:
     return PointOut(
@@ -82,14 +130,14 @@ def _trip_out(t: models.Trip) -> TripOut:
         created_at=t.created_at,
         updated_at=t.updated_at,
         points=[_point_out(p) for p in sorted(t.points, key=lambda x: x.order_index)],
+        regions=_load_json_field(t.regions_json, []),
+        itinerary=_load_json_field(t.itinerary_json, []),
     )
 
 
 def _touch(t: models.Trip):
     t.updated_at = datetime.utcnow()
 
-
-# ---------- Trip APIs ----------
 
 @app.get("/api/trips", response_model=List[TripOut])
 def list_trips(session: Session = Depends(get_session)):
@@ -99,167 +147,144 @@ def list_trips(session: Session = Depends(get_session)):
 
 @app.post("/api/trips", response_model=TripOut)
 def create_trip(body: TripIn, session: Session = Depends(get_session)):
-    t = models.Trip(name=body.name, description=body.description)
-    session.add(t)
+    trip = models.Trip(name=body.name, description=body.description)
+    session.add(trip)
     session.commit()
-    session.refresh(t)
-    return _trip_out(t)
+    session.refresh(trip)
+    return _trip_out(trip)
 
 
 @app.get("/api/trips/{trip_id}", response_model=TripOut)
 def get_trip(trip_id: int, session: Session = Depends(get_session)):
-    t = session.get(models.Trip, trip_id)
-    if not t:
+    trip = session.get(models.Trip, trip_id)
+    if not trip:
         raise HTTPException(404, "trip not found")
-    return _trip_out(t)
+    return _trip_out(trip)
 
 
 @app.patch("/api/trips/{trip_id}", response_model=TripOut)
 def patch_trip(trip_id: int, body: TripPatch, session: Session = Depends(get_session)):
-    t = session.get(models.Trip, trip_id)
-    if not t:
-        raise HTTPException(404)
+    trip = session.get(models.Trip, trip_id)
+    if not trip:
+        raise HTTPException(404, "trip not found")
     if body.name is not None:
-        t.name = body.name
+        trip.name = body.name
     if body.description is not None:
-        t.description = body.description
-    _touch(t)
-    session.add(t)
+        trip.description = body.description
+    if body.regions is not None:
+        trip.regions_json = json.dumps([item.model_dump() for item in body.regions], ensure_ascii=False)
+    if body.itinerary is not None:
+        trip.itinerary_json = json.dumps([item.model_dump() for item in body.itinerary], ensure_ascii=False)
+    _touch(trip)
+    session.add(trip)
     session.commit()
-    session.refresh(t)
-    return _trip_out(t)
+    session.refresh(trip)
+    return _trip_out(trip)
 
 
 @app.delete("/api/trips/{trip_id}")
 def delete_trip(trip_id: int, session: Session = Depends(get_session)):
-    t = session.get(models.Trip, trip_id)
-    if not t:
-        raise HTTPException(404)
-    session.delete(t)
+    trip = session.get(models.Trip, trip_id)
+    if not trip:
+        raise HTTPException(404, "trip not found")
+    session.delete(trip)
     session.commit()
     return {"ok": True}
 
 
-# ---------- Point APIs ----------
+@app.get("/api/regions")
+def region_search(keyword: str):
+    return search_regions(keyword)
+
+
+@app.get("/api/regions/geometry")
+def region_geometry(adcodes: str):
+    codes = [str(code).strip() for code in adcodes.split(",") if str(code).strip()]
+    if not codes:
+        return {"type": "FeatureCollection", "features": []}
+    features = []
+    for code in codes:
+        try:
+            features.append(load_boundary(code))
+        except Exception as exc:
+            raise HTTPException(502, f"加载边界失败：{code} ({exc})")
+    return {"type": "FeatureCollection", "features": features}
+
+
+@app.get("/api/map/background")
+def map_background():
+    return load_province_boundaries()
+
 
 @app.post("/api/trips/{trip_id}/points", response_model=PointOut)
 def add_point(trip_id: int, body: PointIn, session: Session = Depends(get_session)):
-    t = session.get(models.Trip, trip_id)
-    if not t:
-        raise HTTPException(404)
-    max_order = max([p.order_index for p in t.points], default=-1)
-    p = models.Point(
-        trip_id=trip_id, lng=body.lng, lat=body.lat,
-        title=body.title, note=body.note, order_index=max_order + 1,
+    trip = session.get(models.Trip, trip_id)
+    if not trip:
+        raise HTTPException(404, "trip not found")
+    max_order = max([p.order_index for p in trip.points], default=-1)
+    point = models.Point(
+        trip_id=trip_id,
+        lng=body.lng,
+        lat=body.lat,
+        title=body.title,
+        note=body.note,
+        order_index=max_order + 1,
     )
-    session.add(p)
-    _touch(t)
+    session.add(point)
+    _touch(trip)
     session.commit()
-    session.refresh(p)
-    return _point_out(p)
+    session.refresh(point)
+    return _point_out(point)
 
 
 @app.patch("/api/points/{point_id}", response_model=PointOut)
 def patch_point(point_id: int, body: PointIn, session: Session = Depends(get_session)):
-    p = session.get(models.Point, point_id)
-    if not p:
-        raise HTTPException(404)
-    p.lng = body.lng
-    p.lat = body.lat
-    p.title = body.title
-    p.note = body.note
-    t = session.get(models.Trip, p.trip_id)
-    if t:
-        _touch(t)
-    session.add(p)
+    point = session.get(models.Point, point_id)
+    if not point:
+        raise HTTPException(404, "point not found")
+    point.lng = body.lng
+    point.lat = body.lat
+    point.title = body.title
+    point.note = body.note
+    trip = session.get(models.Trip, point.trip_id)
+    if trip:
+        _touch(trip)
+    session.add(point)
     session.commit()
-    session.refresh(p)
-    return _point_out(p)
+    session.refresh(point)
+    return _point_out(point)
 
 
 @app.delete("/api/points/{point_id}")
 def delete_point(point_id: int, session: Session = Depends(get_session)):
-    p = session.get(models.Point, point_id)
-    if not p:
-        raise HTTPException(404)
-    trip_id = p.trip_id
-    session.delete(p)
-    t = session.get(models.Trip, trip_id)
-    if t:
-        _touch(t)
+    point = session.get(models.Point, point_id)
+    if not point:
+        raise HTTPException(404, "point not found")
+    trip = session.get(models.Trip, point.trip_id)
+    session.delete(point)
+    if trip:
+        _touch(trip)
     session.commit()
     return {"ok": True}
 
 
 @app.post("/api/trips/{trip_id}/reorder")
 def reorder_points(trip_id: int, body: ReorderIn, session: Session = Depends(get_session)):
-    t = session.get(models.Trip, trip_id)
-    if not t:
-        raise HTTPException(404)
-    id_to_point = {p.id: p for p in t.points}
-    for new_idx, pid in enumerate(body.point_ids):
-        if pid in id_to_point:
-            id_to_point[pid].order_index = new_idx
-            session.add(id_to_point[pid])
-    _touch(t)
+    trip = session.get(models.Trip, trip_id)
+    if not trip:
+        raise HTTPException(404, "trip not found")
+    point_map = {p.id: p for p in trip.points}
+    for index, point_id in enumerate(body.point_ids):
+        if point_id in point_map:
+            point_map[point_id].order_index = index
+            session.add(point_map[point_id])
+    _touch(trip)
     session.commit()
     return {"ok": True}
 
 
-# ---------- Export ----------
-
-@app.post("/api/trips/{trip_id}/export")
-async def export_trip(
-    trip_id: int,
-    image: UploadFile = File(...),
-    control_points: str = Form(...),   # JSON 字符串：[{"x":..,"y":..,"lng":..,"lat":..}, ...]
-    show_track: bool = Form(True),
-    session: Session = Depends(get_session),
-):
-    t = session.get(models.Trip, trip_id)
-    if not t:
-        raise HTTPException(404)
-
-    try:
-        cps = json.loads(control_points)
-        assert isinstance(cps, list) and len(cps) >= 2
-    except Exception:
-        raise HTTPException(400, "control_points 必须是 JSON 数组，至少 2 项")
-
-    # 存盘，顺便留个备份
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    saved = UPLOAD_DIR / f"trip{trip_id}_{ts}_{image.filename}"
-    content = await image.read()
-    saved.write_bytes(content)
-
-    pts = [
-        {"lng": p.lng, "lat": p.lat, "title": p.title, "order_index": p.order_index}
-        for p in sorted(t.points, key=lambda x: x.order_index)
-    ]
-
-    try:
-        png_bytes = render_overlay(
-            image_path=saved,
-            control_points=cps,
-            points=pts,
-            show_track=show_track,
-        )
-    except Exception as e:
-        raise HTTPException(500, f"渲染失败：{e}")
-
-    from urllib.parse import quote
-    fname = f"{t.name}_{ts}.png"
-    return Response(
-        content=png_bytes,
-        media_type="image/png",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
-    )
-
-
-# ---------- Static Frontend ----------
-
 @app.get("/")
-def index():
+def index_page():
     return FileResponse(FRONTEND_DIR / "index.html")
 
 
@@ -274,8 +299,3 @@ def export_page():
 
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

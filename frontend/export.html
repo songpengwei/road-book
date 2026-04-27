@@ -2,135 +2,43 @@
 <html lang="zh">
 <head>
   <meta charset="utf-8">
-  <title>导出路书 · Road Book</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>生成路书 · Road Book</title>
   <link rel="stylesheet" href="/static/style.css">
-  <style>
-    .editor { grid-template-columns: 340px 1fr; }
-    .export-panes {
-      display: grid;
-      grid-template-rows: 1fr 1fr;
-      height: 100%;
-      background: var(--bg);
-    }
-    .pane {
-      position: relative;
-      overflow: auto;
-      border-top: 1px solid var(--border);
-    }
-    .pane:first-child { border-top: none; }
-    .pane-label {
-      position: absolute;
-      top: 8px; left: 8px;
-      background: rgba(255,255,255,.9);
-      padding: 4px 10px;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--fg-muted);
-      z-index: 400;
-      border: 1px solid var(--border);
-    }
-    #baseImageWrap {
-      position: relative;
-      display: inline-block;
-      min-width: 100%;
-      min-height: 100%;
-      background: repeating-conic-gradient(#f5f5f2 0% 25%, #fff 0% 50%) 0/20px 20px;
-    }
-    #baseImage { display: block; max-width: 100%; }
-    #baseOverlay {
-      position: absolute; top: 0; left: 0;
-      pointer-events: none;
-    }
-    #baseClickCatcher {
-      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-      cursor: crosshair;
-    }
-    .ctrl-dot {
-      position: absolute;
-      width: 22px; height: 22px;
-      margin-left: -11px; margin-top: -11px;
-      background: #fff;
-      border: 2px solid var(--fg);
-      border-radius: 50%;
-      line-height: 18px;
-      text-align: center;
-      font-size: 11px;
-      font-weight: 500;
-      pointer-events: none;
-    }
-    .ctrl-dot.pending { border-color: var(--accent); color: var(--accent); }
-    #geoMap { height: 100%; width: 100%; }
-    .empty-base {
-      display: flex; align-items: center; justify-content: center;
-      height: 100%; color: var(--fg-muted); font-style: italic;
-    }
-    .status-tag {
-      display: inline-block;
-      font-size: 11px;
-      padding: 2px 6px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      border-radius: 2px;
-      margin-left: 6px;
-    }
-  </style>
 </head>
 <body>
-  <header class="topbar">
-    <h1><a href="/" style="border:none">路书</a> <span class="sub" id="tripName">加载中…</span></h1>
-    <nav>
-      <a href="#" id="editLink">编辑</a>
-      <a href="/">返回</a>
-    </nav>
-  </header>
-
-  <div class="editor">
-    <aside class="sidebar">
-      <div class="step">
-        <h2><span class="step-no">1</span> 上传底图</h2>
-        <div class="hint">任意地图图片——卫星图、手绘图、截屏都行。</div>
-        <input type="file" id="fileInput" accept="image/*" style="margin-top:8px">
+  <div class="poster-page">
+    <div class="poster-tools">
+      <div>
+        <a href="/" class="btn">返回列表</a>
+        <a href="#" id="editLink" class="btn">继续编辑</a>
       </div>
+      <button id="downloadBtn" class="primary">生成路书</button>
+    </div>
 
-      <div class="step">
-        <h2><span class="step-no">2</span> 标定控制点</h2>
-        <div class="hint">
-          先在<strong>上方底图</strong>上点击一处，再在<strong>下方真实地图</strong>上点击同一处的位置。
-          至少需要 <strong>3 个</strong>控制点才能准确叠加。
-          <br><br>
-          <em>小技巧：选明显地标——十字路口、山顶、桥头，四角分散开最准。</em>
-        </div>
-        <ul class="ctrl-list" id="ctrlList"></ul>
-        <div id="pendingHint" class="hint" style="color:var(--accent);display:none">
-          ⏳ 已在底图标点，请在下方真实地图上点击对应位置。
-        </div>
-      </div>
-
-      <div class="step">
-        <h2><span class="step-no">3</span> 生成</h2>
-        <label style="font-size:12px;color:var(--fg-muted);display:block;margin:6px 0">
-          <input type="checkbox" id="showTrack" checked> 绘制轨迹连线
-        </label>
-        <button id="exportBtn" class="primary" disabled style="width:100%">生成并下载</button>
-        <div class="hint" id="exportHint" style="margin-top:8px"></div>
-      </div>
-    </aside>
-
-    <div class="map-area">
-      <div class="export-panes">
-        <div class="pane">
-          <div class="pane-label">底图（在此标记控制点位置）</div>
-          <div id="baseImageWrap">
-            <div class="empty-base" id="emptyBase">先在左边上传一张底图。</div>
-            <img id="baseImage" style="display:none" />
-            <div id="baseClickCatcher" style="display:none"></div>
+    <div class="poster-shell">
+      <div class="poster" id="poster">
+        <div class="poster-head">
+          <div>
+            <h1 class="poster-title">地图｜<span id="posterTitle">加载中…</span></h1>
+            <div class="poster-subtitle" id="posterSubtitle"></div>
           </div>
+          <div class="poster-stamp">路书<br>ROAD</div>
         </div>
-        <div class="pane" style="min-height: 300px">
-          <div class="pane-label">真实地图（在此点击对应的经纬度）</div>
-          <div id="geoMap"></div>
+
+        <div class="poster-map-wrap">
+          <div class="poster-legend" id="posterLegend"></div>
+          <div class="poster-map" id="posterMap"></div>
+        </div>
+
+        <div class="poster-table">
+          <div class="poster-table-head">
+            <div>时间</div>
+            <div>坐标</div>
+            <div>参观</div>
+            <div>住宿</div>
+          </div>
+          <div id="posterRows"></div>
         </div>
       </div>
     </div>
@@ -138,7 +46,9 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="/static/roadbook.js"></script>
   <script src="/static/export.js"></script>
 </body>
 </html>

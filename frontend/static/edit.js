@@ -1,226 +1,269 @@
-// 编辑页逻辑
 const tripId = new URLSearchParams(location.search).get("id");
-if (!tripId) { location.href = "/"; }
+if (!tripId) location.href = "/";
 
-const $ = (s) => document.querySelector(s);
-const api = async (url, opt = {}) => {
-  const r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opt });
-  if (!r.ok) throw new Error(await r.text());
-  return r.status === 204 ? null : r.json();
-};
-const toast = (msg) => {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 1600);
-};
+const { $, api, uid, escapeHtml, toast, CATEGORY_META, iconBadge, loadSelectedFeatures, renderMap } = RoadBook;
 
 let trip = null;
-let map, trackLine;
-const markers = new Map(); // point_id -> L.Marker
-let editing = null;        // 当前编辑的 point
+let backgroundGeo = null;
+let selectedGeo = { type: "FeatureCollection", features: [] };
+let searchTimer = null;
 
-function numIcon(n, active = false) {
-  return L.divIcon({
-    className: "rb-marker",
-    html: `${n}`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
-  });
+function emptyDay(index = 0) {
+  return {
+    id: uid("day"),
+    title: `DAY${index + 1}`,
+    time: "",
+    transport: "",
+    route_text: "",
+    accommodation: "",
+    notes: "",
+    places: [],
+  };
 }
 
-// -------- Load --------
+function emptyPlace() {
+  return {
+    id: uid("place"),
+    title: "",
+    category: "heritage",
+    region_adcode: "",
+  };
+}
+
 async function load() {
-  trip = await api(`/api/trips/${tripId}`);
+  const [tripData, bg] = await Promise.all([
+    api(`/api/trips/${tripId}`),
+    api("/api/map/background"),
+  ]);
+  trip = tripData;
+  backgroundGeo = bg;
   $("#tripName").textContent = trip.name;
   $("#nameInput").value = trip.name;
   $("#descInput").value = trip.description || "";
   $("#exportLink").href = `/export?id=${tripId}`;
-  document.title = `${trip.name} · 路书`;
-  renderMap();
-  renderList();
+  $("#previewBtn").href = `/export?id=${tripId}`;
+  await refreshGeometries();
+  render();
 }
 
-function renderMap() {
-  if (map) return;
-  const first = trip.points[0];
-  const center = first ? [first.lat, first.lng] : [35.8617, 104.1954]; // 兰州附近，全中国居中
-  const zoom = first ? 12 : 4;
-  map = L.map("map", { zoomControl: true }).setView(center, zoom);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap",
-    maxZoom: 19,
-  }).addTo(map);
+async function refreshGeometries() {
+  selectedGeo = await loadSelectedFeatures(trip.regions || []);
+}
 
-  map.on("click", async (e) => {
-    const { lng, lat } = e.latlng;
-    const p = await api(`/api/trips/${tripId}/points`, {
-      method: "POST",
-      body: JSON.stringify({ lng, lat, title: "", note: "" }),
-    });
-    trip.points.push(p);
-    addMarker(p);
-    renderList();
-    redrawTrack();
-    openEditPanel(p);
+function renderLegend() {
+  $("#legend").innerHTML = Object.entries(CATEGORY_META)
+    .map(([key]) => iconBadge(key))
+    .join("");
+}
+
+function renderRegions() {
+  const wrap = $("#regionChips");
+  wrap.innerHTML = "";
+  (trip.regions || []).forEach((region) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = `
+      <span>${escapeHtml(region.name)} · ${escapeHtml(region.level || "")}</span>
+      <button data-del="${region.adcode}" title="删除">×</button>
+    `;
+    wrap.appendChild(chip);
   });
-
-  for (const p of trip.points) addMarker(p);
-  redrawTrack();
-  if (trip.points.length >= 2) {
-    const bounds = L.latLngBounds(trip.points.map(p => [p.lat, p.lng]));
-    map.fitBounds(bounds, { padding: [40, 40] });
-  }
-}
-
-function addMarker(p) {
-  const idx = trip.points.findIndex(x => x.id === p.id);
-  const m = L.marker([p.lat, p.lng], {
-    draggable: true,
-    icon: numIcon(idx + 1),
-  }).addTo(map);
-  m.on("click", () => openEditPanel(p));
-  m.on("dragend", async (e) => {
-    const { lng, lat } = e.target.getLatLng();
-    p.lng = lng; p.lat = lat;
-    await api(`/api/points/${p.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ lng, lat, title: p.title, note: p.note }),
-    });
-    redrawTrack();
-    renderList();
-  });
-  markers.set(p.id, m);
-}
-
-function redrawTrack() {
-  if (trackLine) map.removeLayer(trackLine);
-  if (trip.points.length < 2) return;
-  const latlngs = trip.points.map(p => [p.lat, p.lng]);
-  trackLine = L.polyline(latlngs, {
-    color: "#1a1a1a",
-    weight: 3,
-    opacity: 0.85,
-    dashArray: null,
-  }).addTo(map);
-}
-
-function renumberMarkers() {
-  trip.points.forEach((p, i) => {
-    const m = markers.get(p.id);
-    if (m) m.setIcon(numIcon(i + 1));
+  wrap.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.onclick = async () => {
+      trip.regions = trip.regions.filter((r) => r.adcode !== btn.dataset.del);
+      trip.itinerary.forEach((day) => {
+        day.places = day.places.map((place) => {
+          if (place.region_adcode === btn.dataset.del) place.region_adcode = "";
+          return place;
+        });
+      });
+      await refreshGeometries();
+      render();
+    };
   });
 }
 
-// -------- Sidebar list --------
-function renderList() {
-  const list = $("#pointList");
+function renderSearchResults(items) {
+  const list = $("#regionResults");
   list.innerHTML = "";
-  if (!trip.points.length) {
-    list.innerHTML = `<div class="hint" style="text-align:center;padding:20px 0">点一下地图开始。</div>`;
+  items.forEach((item) => {
+    const el = document.createElement("div");
+    el.className = "search-item";
+    el.innerHTML = `
+      <div class="name">${escapeHtml(item.name)}</div>
+      <div class="meta">${escapeHtml(item.full_name)} · ${escapeHtml(item.level)}</div>
+    `;
+    el.onclick = async () => {
+      if (trip.regions.some((r) => r.adcode === item.adcode)) {
+        toast("这个区划已经在路书里了");
+        return;
+      }
+      trip.regions.push(item);
+      $("#regionKeyword").value = "";
+      renderSearchResults([]);
+      await refreshGeometries();
+      render();
+    };
+    list.appendChild(el);
+  });
+}
+
+function placeOptions(selected) {
+  return Object.entries(CATEGORY_META).map(([key, meta]) => `
+    <option value="${key}" ${selected === key ? "selected" : ""}>${meta.label}</option>
+  `).join("");
+}
+
+function regionOptions(selected) {
+  const options = [`<option value="">选择所在区划</option>`];
+  (trip.regions || []).forEach((region) => {
+    options.push(`<option value="${region.adcode}" ${selected === region.adcode ? "selected" : ""}>${escapeHtml(region.name)} · ${escapeHtml(region.level)}</option>`);
+  });
+  return options.join("");
+}
+
+function renderDays() {
+  const wrap = $("#dayList");
+  wrap.innerHTML = "";
+  if (!trip.itinerary.length) {
+    wrap.innerHTML = `<div class="hint">还没有行程日，点“新增一天”。</div>`;
     return;
   }
-  trip.points.forEach((p, i) => {
-    const li = document.createElement("li");
-    li.className = "point-item";
-    li.innerHTML = `
-      <span class="idx">${i + 1}</span>
-      <span class="title">${escapeHtml(p.title || "（未命名）")}</span>
-      <div class="coord">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</div>
-      <div class="item-actions">
-        <button data-up="${p.id}">↑</button>
-        <button data-down="${p.id}">↓</button>
-        <button data-del="${p.id}" class="danger">✕</button>
+
+  trip.itinerary.forEach((day, dayIndex) => {
+    const card = document.createElement("div");
+    card.className = "day-card";
+    card.innerHTML = `
+      <div class="day-head">
+        <strong>${escapeHtml(day.title || `DAY${dayIndex + 1}`)}</strong>
+        <div class="inline-actions">
+          <button data-add-place="${day.id}">新增地点</button>
+          <button class="danger" data-del-day="${day.id}">删除这天</button>
+        </div>
+      </div>
+      <div class="field-grid">
+        <input data-field="title" data-day="${day.id}" value="${escapeHtml(day.title || "")}" placeholder="DAY1 / 5月1日 / 第一天">
+        <input data-field="time" data-day="${day.id}" value="${escapeHtml(day.time || "")}" placeholder="时间，可选精确到小时">
+        <input data-field="transport" data-day="${day.id}" value="${escapeHtml(day.transport || "")}" placeholder="交通：高铁 / 包车 / 航班 CA1234">
+        <input data-field="accommodation" data-day="${day.id}" value="${escapeHtml(day.accommodation || "")}" placeholder="住宿">
+      </div>
+      <div class="field-grid single" style="margin-top:10px">
+        <input data-field="route_text" data-day="${day.id}" value="${escapeHtml(day.route_text || "")}" placeholder="行程路线：沈阳-辽阳-义县">
+        <textarea data-field="notes" data-day="${day.id}" placeholder="备注：距离、时长、特殊说明">${escapeHtml(day.notes || "")}</textarea>
+      </div>
+      <div class="places">
+        ${(day.places || []).map((place) => `
+          <div class="place-row">
+            <div class="place-grid">
+              <input data-place-field="title" data-place="${place.id}" data-day="${day.id}" value="${escapeHtml(place.title || "")}" placeholder="地点：辽宁博物馆 / 东京陵">
+              <select data-place-field="category" data-place="${place.id}" data-day="${day.id}">
+                ${placeOptions(place.category)}
+              </select>
+              <select data-place-field="region_adcode" data-place="${place.id}" data-day="${day.id}">
+                ${regionOptions(place.region_adcode)}
+              </select>
+              <button class="danger" data-del-place="${place.id}" data-day="${day.id}">删除</button>
+            </div>
+          </div>
+        `).join("")}
       </div>
     `;
-    li.onclick = (e) => {
-      if (e.target.closest(".item-actions")) return;
-      const m = markers.get(p.id);
-      if (m) map.panTo(m.getLatLng());
-      openEditPanel(p);
-    };
-    list.appendChild(li);
+    wrap.appendChild(card);
   });
 
-  list.querySelectorAll("[data-del]").forEach(b => {
-    b.onclick = async (e) => {
-      e.stopPropagation();
-      if (!confirm("删除这个地点？")) return;
-      const id = +b.dataset.del;
-      await api(`/api/points/${id}`, { method: "DELETE" });
-      const m = markers.get(id);
-      if (m) { map.removeLayer(m); markers.delete(id); }
-      trip.points = trip.points.filter(p => p.id !== id);
-      renumberMarkers();
-      redrawTrack();
-      renderList();
-      closeEditPanel();
+  wrap.querySelectorAll("[data-field]").forEach((input) => {
+    input.oninput = () => {
+      const day = trip.itinerary.find((item) => item.id === input.dataset.day);
+      day[input.dataset.field] = input.value;
+      renderMapPreview();
     };
   });
-  list.querySelectorAll("[data-up]").forEach(b => { b.onclick = (e) => { e.stopPropagation(); move(+b.dataset.up, -1); }; });
-  list.querySelectorAll("[data-down]").forEach(b => { b.onclick = (e) => { e.stopPropagation(); move(+b.dataset.down, +1); }; });
-}
-
-async function move(pid, delta) {
-  const i = trip.points.findIndex(p => p.id === pid);
-  const j = i + delta;
-  if (j < 0 || j >= trip.points.length) return;
-  [trip.points[i], trip.points[j]] = [trip.points[j], trip.points[i]];
-  await api(`/api/trips/${tripId}/reorder`, {
-    method: "POST",
-    body: JSON.stringify({ point_ids: trip.points.map(p => p.id) }),
+  wrap.querySelectorAll("[data-place-field]").forEach((input) => {
+    input.oninput = () => {
+      const day = trip.itinerary.find((item) => item.id === input.dataset.day);
+      const place = day.places.find((item) => item.id === input.dataset.place);
+      place[input.dataset.placeField] = input.value;
+      renderMapPreview();
+    };
   });
-  renumberMarkers();
-  redrawTrack();
-  renderList();
+  wrap.querySelectorAll("[data-add-place]").forEach((btn) => {
+    btn.onclick = () => {
+      const day = trip.itinerary.find((item) => item.id === btn.dataset.addPlace);
+      day.places.push(emptyPlace());
+      renderDays();
+      renderMapPreview();
+    };
+  });
+  wrap.querySelectorAll("[data-del-day]").forEach((btn) => {
+    btn.onclick = () => {
+      trip.itinerary = trip.itinerary.filter((item) => item.id !== btn.dataset.delDay);
+      renderDays();
+      renderMapPreview();
+    };
+  });
+  wrap.querySelectorAll("[data-del-place]").forEach((btn) => {
+    btn.onclick = () => {
+      const day = trip.itinerary.find((item) => item.id === btn.dataset.day);
+      day.places = day.places.filter((item) => item.id !== btn.dataset.delPlace);
+      renderDays();
+      renderMapPreview();
+    };
+  });
 }
 
-// -------- Edit panel --------
-function openEditPanel(p) {
-  editing = p;
-  $("#epTitle").value = p.title || "";
-  $("#epNote").value = p.note || "";
-  $("#epCoord").value = `${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`;
-  $("#editPanel").style.display = "block";
-  setTimeout(() => $("#epTitle").focus(), 50);
+function renderMapPreview() {
+  renderMap($("#mapPreview"), backgroundGeo, selectedGeo, trip, {
+    emptyHint: "先搜索区划并加入路线范围",
+  });
 }
-function closeEditPanel() {
-  editing = null;
-  $("#editPanel").style.display = "none";
+
+function render() {
+  $("#tripName").textContent = trip.name;
+  document.title = `${trip.name} · 编辑路书`;
+  renderLegend();
+  renderRegions();
+  renderDays();
+  renderMapPreview();
 }
-$("#epCancel").onclick = closeEditPanel;
-$("#epSave").onclick = async () => {
-  if (!editing) return;
-  const title = $("#epTitle").value.trim();
-  const note = $("#epNote").value.trim();
-  const updated = await api(`/api/points/${editing.id}`, {
+
+$("#regionKeyword").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  const keyword = $("#regionKeyword").value.trim();
+  if (!keyword) {
+    renderSearchResults([]);
+    return;
+  }
+  searchTimer = setTimeout(async () => {
+    const items = await api(`/api/regions?keyword=${encodeURIComponent(keyword)}`);
+    renderSearchResults(items);
+  }, 180);
+});
+
+$("#addDayBtn").onclick = () => {
+  trip.itinerary.push(emptyDay(trip.itinerary.length));
+  renderDays();
+  renderMapPreview();
+};
+
+$("#saveBtn").onclick = async () => {
+  trip.name = $("#nameInput").value.trim() || "未命名路书";
+  trip.description = $("#descInput").value.trim();
+  const saved = await api(`/api/trips/${tripId}`, {
     method: "PATCH",
-    body: JSON.stringify({ lng: editing.lng, lat: editing.lat, title, note }),
+    body: JSON.stringify({
+      name: trip.name,
+      description: trip.description,
+      regions: trip.regions,
+      itinerary: trip.itinerary,
+    }),
   });
-  Object.assign(editing, updated);
-  renderList();
-  closeEditPanel();
+  trip = saved;
+  await refreshGeometries();
+  render();
   toast("已保存");
 };
-// 回车保存
-$("#epTitle").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#epSave").click(); });
 
-// -------- Meta save --------
-$("#saveMetaBtn").onclick = async () => {
-  const name = $("#nameInput").value.trim() || "未命名路书";
-  const description = $("#descInput").value;
-  await api(`/api/trips/${tripId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ name, description }),
-  });
-  trip.name = name; trip.description = description;
-  $("#tripName").textContent = name;
-  document.title = `${name} · 路书`;
-  toast("已保存");
-};
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-}
-
-load();
+load().catch((err) => {
+  console.error(err);
+  alert(`加载失败：${err.message}`);
+});

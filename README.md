@@ -1,38 +1,41 @@
 # Road Book · 路书
 
-一个朴素的路书工具：在地图上标点、连线、写字，导出时可把标注叠到任意底图上。
+一个面向“海报式路书”的轻量工具：
 
-## 设计参考
-
-视觉上借 Stamen Toner / Mapbox Light 的克制感——不用渐变，不用阴影，等宽字做标签，单色勾线。功能上像一本田野笔记的电子版。
+- 搜索省 / 地级市 / 县区并加入地图范围
+- 给每天录入时间、交通、住宿、行程地点
+- 为地点指定分类图例，如机场、酒店、国保、公园、小吃街
+- 自动生成虚线高亮区划、行程点线和下方时间线表格
+- 最终一键导出 PNG
 
 ## 技术栈
 
 - 后端：FastAPI + SQLite + SQLModel
-- 前端：原生 HTML/JS + Leaflet.js
-- 瓦片：OpenStreetMap（默认）· 高德（可选，需 key）
-- 导出：Pillow（后端渲染，保证样式一致）
+- 前端：原生 HTML / JS + D3
+- 区划检索：GitHub 上的中国行政区划代码数据
+- 区划边界：阿里云 DataV GeoJSON
+- 导出：html2canvas
 
 ## 目录结构
 
-```
+```text
 road-book/
 ├── backend/
-│   ├── app.py            # FastAPI 入口
-│   ├── models.py         # 数据模型
-│   ├── db.py             # 数据库初始化
-│   ├── render.py         # 导出图片渲染
+│   ├── app.py
+│   ├── db.py
+│   ├── geo.py
+│   ├── models.py
 │   └── requirements.txt
 ├── frontend/
-│   ├── index.html        # 路书列表
-│   ├── edit.html         # 编辑页
-│   ├── export.html       # 导出页
-│   ├── static/
-│   │   ├── style.css
-│   │   ├── edit.js
-│   │   └── export.js
-├── data/                 # SQLite 文件 + 上传的底图
-└── README.md
+│   ├── index.html
+│   ├── edit.html
+│   ├── export.html
+│   └── static/
+│       ├── roadbook.js
+│       ├── edit.js
+│       ├── export.js
+│       └── style.css
+└── data/
 ```
 
 ## 运行
@@ -43,22 +46,12 @@ pip install -r requirements.txt
 uvicorn app:app --reload --port 8000
 ```
 
-打开 http://localhost:8000
+打开 `http://localhost:8000`
 
-## 功能
+## 当前流程
 
-### 1. 地图上标点、连线
-- 点击地图添加地点，拖动调整
-- 每个地点可输入标题、备注
-- 按顺序连成轨迹
-
-### 2. 导出到任意底图
-因为"任意图片"没有地理参考，需要你先指定 2 个以上的**控制点**——
-在底图上点一下，再告诉我这点在真实世界里的经纬度（或直接从地图上吸取）。
-有了控制点，就能算出仿射变换，把所有地点/轨迹叠到底图上。
-
-导出格式：PNG。
-
-## License
-
-MIT
+1. 在首页新建一本路书
+2. 编辑页搜索区划，加入路线范围
+3. 在时间线里逐天录入交通、住宿和地点
+4. 地点可选择图例分类和所属区划
+5. 打开“生成路书”页，直接下载 PNG

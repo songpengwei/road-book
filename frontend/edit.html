@@ -2,59 +2,78 @@
 <html lang="zh">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>编辑路书 · Road Book</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="topbar">
-    <h1><a href="/" style="border:none">路书</a> <span class="sub" id="tripName">加载中…</span></h1>
+    <h1><a href="/">路书</a> <span class="sub" id="tripName">加载中…</span></h1>
     <nav>
-      <a href="#" id="exportLink">导出</a>
-      <a href="/">返回</a>
+      <a href="/" class="muted">返回</a>
+      <a href="#" id="exportLink" class="btn primary">生成路书</a>
     </nav>
   </header>
 
-  <div class="editor">
-    <aside class="sidebar">
-      <div class="trip-meta">
-        <input type="text" id="nameInput" placeholder="路书名">
-        <textarea id="descInput" placeholder="随便写点说明——去哪、谁一起、什么季节……"></textarea>
-        <div style="margin-top:6px;text-align:right">
-          <button id="saveMetaBtn">保存</button>
+  <main class="editor-layout">
+    <section class="editor-sidebar">
+      <div class="sidebar-card">
+        <h2>路书信息</h2>
+        <div class="field-grid single">
+          <input id="nameInput" placeholder="路书标题">
+          <textarea id="descInput" placeholder="写一句导语，导出页会放在标题下方。"></textarea>
         </div>
       </div>
 
-      <div style="margin:20px 0 4px">
-        <h2>地点</h2>
-        <div class="hint">点一下地图添加；拖动标记可微调位置；点击列表项可编辑。</div>
+      <div class="sidebar-card">
+        <h2>路线范围</h2>
+        <div class="hint">支持省 / 地级市 / 县区搜索。加入后会以虚线边界高亮显示。</div>
+        <div class="field-grid single">
+          <input id="regionKeyword" placeholder="搜索：辽阳、义县、内蒙古…">
+        </div>
+        <div class="search-results" id="regionResults"></div>
+        <div class="region-chips" id="regionChips"></div>
       </div>
 
-      <ul class="point-list" id="pointList"></ul>
-    </aside>
+      <div class="sidebar-card">
+        <div class="day-head">
+          <strong>时间线</strong>
+          <button id="addDayBtn">新增一天</button>
+        </div>
+        <div class="hint">每一天可录入时间、交通、住宿，再为行程地点选择地区和图例类别。</div>
+        <div class="day-list" id="dayList"></div>
+      </div>
 
-    <div class="map-area">
-      <div id="map"></div>
-
-      <div class="edit-panel" id="editPanel" style="display:none">
-        <h3>地点信息</h3>
-        <label>标题</label>
-        <input type="text" id="epTitle" placeholder="例如：雁栖湖日出">
-        <label>备注</label>
-        <textarea id="epNote" placeholder="可选"></textarea>
-        <label>经纬度</label>
-        <input type="text" id="epCoord" readonly style="font-family:monospace;color:var(--fg-muted)">
-        <div class="actions">
-          <button id="epCancel">取消</button>
-          <button id="epSave" class="primary">保存</button>
+      <div class="sidebar-card">
+        <div class="inline-actions">
+          <button id="saveBtn" class="primary">保存</button>
+          <a class="btn" id="previewBtn" href="#">查看成品页</a>
         </div>
       </div>
-    </div>
-  </div>
+    </section>
+
+    <section class="preview-stack">
+      <div class="preview-card">
+        <div class="summary-bar">
+          <div>
+            <div class="section-title">地图预览</div>
+            <div class="hint">虚线为选中行政区，红色点线取自行程地点。</div>
+          </div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="map-preview" id="mapPreview"></div>
+      </div>
+      <div class="preview-card">
+        <div class="section-title">导出说明</div>
+        <div class="hint">成品页会按参考图生成：上方地图与图例，下方时间线表格，点击“生成路书”直接下载 PNG。</div>
+      </div>
+    </section>
+  </main>
 
   <div class="toast" id="toast"></div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="/static/roadbook.js"></script>
   <script src="/static/edit.js"></script>
 </body>
 </html>
