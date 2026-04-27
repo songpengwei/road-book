@@ -8,6 +8,11 @@ let backgroundGeo = null;
 let selectedGeo = { type: "FeatureCollection", features: [] };
 let searchTimer = null;
 
+function clearRegionSearch() {
+  $("#regionKeyword").value = "";
+  renderSearchResults([]);
+}
+
 function emptyDay(index = 0) {
   return {
     id: uid("day"),
@@ -77,6 +82,9 @@ function renderRegions() {
           return place;
         });
       });
+      if (!trip.regions.length) {
+        clearRegionSearch();
+      }
       await refreshGeometries();
       render();
     };
@@ -99,8 +107,7 @@ function renderSearchResults(items) {
         return;
       }
       trip.regions.push(item);
-      $("#regionKeyword").value = "";
-      renderSearchResults([]);
+      clearRegionSearch();
       await refreshGeometries();
       render();
     };
@@ -220,6 +227,9 @@ function renderMapPreview() {
 function render() {
   $("#tripName").textContent = trip.name;
   document.title = `${trip.name} · 编辑路书`;
+  if (!$("#regionKeyword").value.trim()) {
+    renderSearchResults([]);
+  }
   renderLegend();
   renderRegions();
   renderDays();

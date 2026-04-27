@@ -92,22 +92,23 @@ window.RoadBook = (() => {
     const height = Math.max(container.clientHeight || 520, 240);
     container.innerHTML = "";
 
-    const svg = d3.create("svg")
+    const selectedFeatures = (selectedGeo?.features || []).filter(Boolean);
+    const projection = d3.geoMercator();
+    projection.fitExtent([[28, 28], [width - 28, height - 28]], backgroundGeo);
+    const path = d3.geoPath(projection);
+
+    const shell = d3.create("div").attr("class", "rb-map-shell");
+    const svg = shell.append("svg")
       .attr("viewBox", `0 0 ${width} ${height}`)
       .attr("class", "rb-map-svg");
-
-    const selectedFeatures = (selectedGeo?.features || []).filter(Boolean);
-    const fitGeo = selectedFeatures.length ? { type: "FeatureCollection", features: selectedFeatures } : backgroundGeo;
-    const projection = d3.geoMercator();
-    projection.fitExtent([[28, 28], [width - 28, height - 28]], fitGeo);
-    const path = d3.geoPath(projection);
+    const scene = svg.append("g").attr("class", "rb-map-scene");
 
     svg.append("rect")
       .attr("width", width)
       .attr("height", height)
       .attr("fill", "#f7f4ee");
 
-    svg.append("g")
+    scene.append("g")
       .selectAll("path")
       .data(backgroundGeo.features || [])
       .join("path")
@@ -117,7 +118,7 @@ window.RoadBook = (() => {
       .attr("stroke-width", 1.6)
       .attr("stroke-dasharray", "7 7");
 
-    svg.append("g")
+    scene.append("g")
       .selectAll("path")
       .data(selectedFeatures)
       .join("path")
@@ -129,7 +130,7 @@ window.RoadBook = (() => {
       .attr("stroke-linejoin", "round");
 
     const centers = computeProjectedCenters(selectedFeatures, projection);
-    svg.append("g")
+    scene.append("g")
       .selectAll("text")
       .data(selectedFeatures)
       .join("text")
@@ -148,7 +149,7 @@ window.RoadBook = (() => {
 
     if (routePoints.length > 1) {
       const line = d3.line().curve(d3.curveCatmullRom.alpha(0.6));
-      svg.append("path")
+      scene.append("path")
         .attr("d", line(routePoints))
         .attr("fill", "none")
         .attr("stroke", "#d84545")
@@ -157,7 +158,7 @@ window.RoadBook = (() => {
         .attr("stroke-dasharray", "1 11");
     }
 
-    const labels = svg.append("g");
+    const labels = scene.append("g");
     stops.forEach((stop, index) => {
       const point = centers.get(stop.region.adcode);
       if (!point) return;
@@ -209,7 +210,49 @@ window.RoadBook = (() => {
         .text(opts.emptyHint);
     }
 
-    container.appendChild(svg.node());
+    const zoom = d3.zoom()
+      .scaleExtent([1, 40])
+      .on("zoom", (event) => {
+        scene.attr("transform", event.transform);
+      });
+    svg.call(zoom);
+
+    function fitTransform(geojson) {
+      const bounds = path.bounds(geojson);
+      const [[x0, y0], [x1, y1]] = bounds;
+      const dx = Math.max(1, x1 - x0);
+      const dy = Math.max(1, y1 - y0);
+      const padding = 28;
+      const k = Math.min(
+        40,
+        0.94 / Math.max(dx / Math.max(1, width - padding * 2), dy / Math.max(1, height - padding * 2)),
+      );
+      const tx = width / 2 - k * (x0 + x1) / 2;
+      const ty = height / 2 - k * (y0 + y1) / 2;
+      return d3.zoomIdentity.translate(tx, ty).scale(k);
+    }
+
+    const initialGeo = selectedFeatures.length
+      ? { type: "FeatureCollection", features: selectedFeatures }
+      : backgroundGeo;
+    const initialTransform = fitTransform(initialGeo);
+    svg.call(zoom.transform, initialTransform);
+
+    const controls = shell.append("div").attr("class", "rb-map-controls");
+    controls.append("button")
+      .attr("type", "button")
+      .text("+")
+      .on("click", () => svg.transition().duration(180).call(zoom.scaleBy, 1.35));
+    controls.append("button")
+      .attr("type", "button")
+      .text("−")
+      .on("click", () => svg.transition().duration(180).call(zoom.scaleBy, 1 / 1.35));
+    controls.append("button")
+      .attr("type", "button")
+      .text("重置")
+      .on("click", () => svg.transition().duration(220).call(zoom.transform, initialTransform));
+
+    container.appendChild(shell.node());
   }
 
   async function downloadElementAsPng(element, filename) {
